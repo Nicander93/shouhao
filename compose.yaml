@@ -1,0 +1,15 @@
+services:
+  shouhao:
+    build: .
+    ports:
+      - '3000:3000'
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?请在 .env 设置 APP_PASSWORD}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.openai.com/v1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+    volumes:
+      - shouhao_data:/app/data
+    restart: unless-stopped
+volumes:
+  shouhao_data:
