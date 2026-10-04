@@ -1,6 +1,8 @@
 import { lookup } from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
+import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
+import { pipeline } from 'node:stream';
 import ipaddr from 'ipaddr.js';
 
 export function isPublicAddress(address: string) {
@@ -82,26 +84,58 @@ export async function fetchPublicHtml(
           reject(new Error('这个链接不是 HTML 网页'));
           return;
         }
+        const encoding = response.headers['content-encoding']?.trim().toLowerCase();
+        const decoder =
+          encoding === 'gzip'
+            ? createGunzip()
+            : encoding === 'br'
+              ? createBrotliDecompress()
+              : encoding === 'deflate'
+                ? createInflate()
+                : undefined;
+        if (encoding && encoding !== 'identity' && !decoder) {
+          response.destroy();
+          reject(new Error('不支持的网页压缩格式'));
+          return;
+        }
+        let transferredBytes = 0;
+        response.on('data', (chunk: Buffer) => {
+          transferredBytes += chunk.length;
+          if (transferredBytes > 2 * 1024 * 1024) response.destroy(new Error('网页内容过大'));
+        });
+        const body = decoder || response;
+        if (decoder)
+          pipeline(response, decoder, (error) => {
+            if (error) reject(error);
+          });
         let bytes = 0;
         const chunks: Buffer[] = [];
-        response.on('data', (chunk: Buffer) => {
+        body.on('data', (chunk: Buffer) => {
           bytes += chunk.length;
           if (bytes > 2 * 1024 * 1024) {
             response.destroy(new Error('网页内容过大'));
+            body.destroy(new Error('网页内容过大'));
             return;
           }
           chunks.push(chunk);
         });
         response.on('error', reject);
-        response.on('end', () => {
-          const charset = /charset=["']?([^;\s"']+)/i.exec(contentType)?.[1] || 'utf-8';
+        body.on('error', reject);
+        body.on('end', () => {
+          const buffer = Buffer.concat(chunks);
+          const charset =
+            /charset=["']?([^;\s"']+)/i.exec(contentType)?.[1] ||
+            /<meta\b[^>]*charset\s*=\s*["']?([^;\s"'/>]+)/i.exec(
+              buffer.subarray(0, 4096).toString('ascii'),
+            )?.[1] ||
+            'utf-8';
           try {
             resolve({
-              html: new TextDecoder(charset).decode(Buffer.concat(chunks)),
+              html: new TextDecoder(charset).decode(buffer),
               url: url.href,
             });
           } catch {
-            resolve({ html: Buffer.concat(chunks).toString('utf8'), url: url.href });
+            resolve({ html: buffer.toString('utf8'), url: url.href });
           }
         });
       },

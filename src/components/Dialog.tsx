@@ -15,13 +15,19 @@ export function Dialog({
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     dialog?.showModal();
-    return () => dialog?.close();
+    return () => {
+      dialog?.close();
+      document.body.style.overflow = previousOverflow;
+    };
   }, []);
   return (
     <dialog
       ref={ref}
       className={`dialog ${className}`}
+      aria-label={title}
       onCancel={(event) => {
         event.preventDefault();
         onClose();

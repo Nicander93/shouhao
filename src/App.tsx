@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownToLine,
   Bookmark,
@@ -34,6 +34,8 @@ export function App() {
   const [editor, setEditor] = useState<{ item?: CollectionItem; type?: ContentType }>();
   const [selectedId, setSelectedId] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const menuRef = useRef<HTMLButtonElement>(null);
   const [busyIds, setBusyIds] = useState(new Set<string>());
   const [toast, setToast] = useState('');
   const collection = useCollection(Boolean(config?.authenticated));
@@ -61,6 +63,47 @@ export function App() {
     const timer = setTimeout(() => setToast(''), 3500);
     return () => clearTimeout(timer);
   }, [toast]);
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const sidebar = sidebarRef.current;
+    const menu = menuRef.current;
+    if (!sidebar) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const controls = () =>
+      [...sidebar.querySelectorAll<HTMLElement>('a[href], button:not(:disabled)')].filter(
+        (element) => element.getClientRects().length > 0,
+      );
+    const focusFrame = requestAnimationFrame(() => controls()[0]?.focus({ preventScroll: true }));
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') setSidebarOpen(false);
+      if (event.key !== 'Tab') return;
+      const elements = controls();
+      const first = elements[0];
+      const last = elements.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
+    const desktop = window.matchMedia('(min-width: 761px)');
+    const closeOnDesktop = () => {
+      if (desktop.matches) setSidebarOpen(false);
+    };
+    closeOnDesktop();
+    desktop.addEventListener('change', closeOnDesktop);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      cancelAnimationFrame(focusFrame);
+      desktop.removeEventListener('change', closeOnDesktop);
+      document.removeEventListener('keydown', handleKey);
+      menu?.focus();
+    };
+  }, [sidebarOpen]);
   const tags = useMemo(() => {
     const counts = new Map<string, number>();
     collection.items.forEach((item) =>
@@ -145,10 +188,25 @@ export function App() {
         <button
           className="sidebar-scrim"
           aria-label="关闭菜单"
+          tabIndex={-1}
           onClick={() => setSidebarOpen(false)}
         />
       )}
-      <aside className={`sidebar ${sidebarOpen ? 'sidebar--open' : ''}`}>
+      <aside
+        id="collection-sidebar"
+        ref={sidebarRef}
+        className={`sidebar ${sidebarOpen ? 'sidebar--open' : ''}`}
+        role={sidebarOpen ? 'dialog' : undefined}
+        aria-modal={sidebarOpen ? true : undefined}
+        aria-label="收藏菜单"
+      >
+        <button
+          className="icon-button sidebar__close"
+          aria-label="收起菜单"
+          onClick={() => setSidebarOpen(false)}
+        >
+          <X size={20} />
+        </button>
         <a className="brand" href="/" aria-label="收好首页">
           <span className="brand__mark">
             <Bookmark size={23} strokeWidth={1.5} />
@@ -240,12 +298,15 @@ export function App() {
           <span>一点一点，留下喜欢的。</span>
         </div>
       </aside>
-      <main className="main">
+      <main className="main" inert={sidebarOpen}>
         <header className="topbar">
           <div className="topbar__breadcrumb">
             <button
               className="icon-button mobile-menu"
+              ref={menuRef}
               aria-label="打开菜单"
+              aria-expanded={sidebarOpen}
+              aria-controls="collection-sidebar"
               onClick={() => setSidebarOpen(true)}
             >
               <Menu size={22} />

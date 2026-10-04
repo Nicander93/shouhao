@@ -26,6 +26,7 @@ export interface LinkPreview {
   author: string;
   type: ContentType;
   url: string;
+  tags: string[];
   warning?: string;
 }
 export interface AiSuggestion {

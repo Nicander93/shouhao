@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ImagePlus, Link, LoaderCircle, Sparkles, X } from 'lucide-react';
-import type { CollectionItem, ContentType, ItemInput } from '../../shared/types';
+import type { CollectionItem, ContentType, ItemInput, LinkPreview } from '../../shared/types';
 import { Dialog } from './Dialog';
 import { api } from '../lib/api';
 import { emptyItem, itemInput, readImage, typeLabels } from '../lib/content';
@@ -31,9 +31,13 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
   const [notice, setNotice] = useState('');
   const [suggestion, setSuggestion] = useState<Awaited<ReturnType<typeof api.organize>>>();
   const abort = useRef<AbortController | null>(null);
+  const editedFields = useRef(new Set<keyof ItemInput>());
+  const lastPreview = useRef<LinkPreview | undefined>(item);
+  const identifiedText = useRef('');
   const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => () => abort.current?.abort(), []);
   function update<K extends keyof ItemInput>(key: K, value: ItemInput[K]) {
+    editedFields.current.add(key);
     setForm((current) => ({ ...current, [key]: value }));
   }
   function switchMode(next: typeof mode) {
@@ -44,24 +48,58 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
     setSuggestion(undefined);
     setNotice('');
     setError('');
+    editedFields.current.clear();
+    lastPreview.current = undefined;
+    identifiedText.current = '';
   }
-  async function identify() {
+  function changeLink(text: string) {
+    abort.current?.abort();
+    setLinkText(text);
+    setNotice('');
+    setError('');
+    setSuggestion(undefined);
+    identifiedText.current = '';
+    if (busy === 'preview') setBusy('');
+  }
+  async function identify(text = linkText) {
     setBusy('preview');
     setError('');
     setNotice('');
     abort.current?.abort();
-    abort.current = new AbortController();
+    const controller = new AbortController();
+    abort.current = controller;
     try {
-      const preview = await api.preview(linkText, abort.current.signal);
-      const { warning, ...fields } = preview;
-      setForm((current) => ({ ...current, ...fields }));
-      setLinkText(preview.url);
-      setNotice(warning || '已识别，可修改后收藏');
+      const preview = await api.preview(text, controller.signal);
+      if (controller.signal.aborted) return;
+      const previousPreview = lastPreview.current;
+      lastPreview.current = preview;
+      identifiedText.current = text;
+      setForm((current) => {
+        const next = { ...current, url: preview.url };
+        for (const key of ['title', 'description', 'cover', 'source', 'author'] as const) {
+          if (
+            !editedFields.current.has(key) &&
+            (preview[key] ||
+              (preview.url !== previousPreview?.url && current[key] === previousPreview?.[key]))
+          )
+            next[key] = preview[key];
+        }
+        if (!editedFields.current.has('type')) next.type = preview.type;
+        if (!editedFields.current.has('tags')) {
+          next.tags = [
+            ...new Set([
+              ...current.tags.filter((tag) => !previousPreview?.tags.includes(tag)),
+              ...preview.tags,
+            ]),
+          ].slice(0, 20);
+        }
+        return next;
+      });
+      setNotice(preview.warning || '已自动提取标题、封面等信息，可修改后收藏');
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError'))
-        setError(error instanceof Error ? error.message : '识别失败');
+      if (!controller.signal.aborted) setError(error instanceof Error ? error.message : '识别失败');
     } finally {
-      setBusy('');
+      if (abort.current === controller && !controller.signal.aborted) setBusy('');
     }
   }
   async function upload(file?: File) {
@@ -137,7 +175,10 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
         setError('请填写链接');
         return;
       }
-      payload.url = match[0].replace(/[，。；、）)\]】]+$/g, '');
+      payload.url =
+        identifiedText.current === linkText
+          ? form.url
+          : match[0].replace(/[，。；、）)\]】]+$/g, '');
     }
     setBusy('save');
     try {
@@ -176,19 +217,29 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
                 id="link"
                 rows={2}
                 value={linkText}
-                onChange={(event) => {
-                  setLinkText(event.target.value);
-                  setNotice('');
-                  setSuggestion(undefined);
+                onChange={(event) => changeLink(event.target.value)}
+                onPaste={(event) => {
+                  if (item) return;
+                  const pasted = event.clipboardData.getData('text');
+                  const input = event.currentTarget;
+                  const text =
+                    linkText.slice(0, input.selectionStart) +
+                    pasted +
+                    linkText.slice(input.selectionEnd);
+                  if (!/https?:\/\//i.test(text) || text.length > 6000) return;
+                  event.preventDefault();
+                  changeLink(text);
+                  void identify(text);
                 }}
                 placeholder="粘贴链接，也可以粘贴 App 的分享文字"
                 maxLength={6000}
                 required
+                disabled={Boolean(busy) && busy !== 'preview'}
               />
               <button
                 type="button"
                 className="button button--secondary"
-                onClick={identify}
+                onClick={() => void identify()}
                 disabled={Boolean(busy) || !linkText.trim()}
               >
                 {busy === 'preview' ? (
@@ -196,9 +247,10 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
                 ) : (
                   <Link size={16} />
                 )}
-                识别
+                {busy === 'preview' ? '正在识别…' : '识别'}
               </button>
             </div>
+            <small>粘贴后自动提取标题、标签、封面和作者；手动修改的字段会保留。</small>
           </div>
         )}
         {notice && (
@@ -320,15 +372,15 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
                   maxLength={2048}
                 />
               </div>
-              {form.cover && (
-                <img
-                  className="editor__cover"
-                  src={form.cover}
-                  alt="封面预览"
-                  referrerPolicy="no-referrer"
-                />
-              )}
             </details>
+            {form.cover && (
+              <img
+                className="editor__cover"
+                src={form.cover}
+                alt="封面预览"
+                referrerPolicy="no-referrer"
+              />
+            )}
           </>
         )}
         <div className="field">
