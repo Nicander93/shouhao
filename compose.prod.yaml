@@ -1,0 +1,7 @@
+services:
+  shouhao:
+    container_name: shouhao
+    ports: !override []
+networks:
+  default:
+    name: shouhao_net
