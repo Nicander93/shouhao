@@ -23,3 +23,11 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
+  deploy:
+    needs: checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, shouhao]
+    steps:
+      # 部署目录固定在服务器的 /opt/shouhao，runner 注册时要加上标签 shouhao。
+      - name: Pull and rebuild
+        run: bash /opt/shouhao/deploy.sh
