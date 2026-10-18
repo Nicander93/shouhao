@@ -4,6 +4,40 @@ import type { CollectionItem, ContentType, ItemInput, LinkPreview } from '../../
 import { Dialog } from './Dialog';
 import { api } from '../lib/api';
 import { emptyItem, itemInput, readImage, typeLabels } from '../lib/content';
+
+const previewTextFields = ['title', 'description', 'cover', 'source', 'author'] as const;
+
+// 手动改过的字段保留。链接换了、且当前值仍是上一次识别填上的，才允许新结果替换。
+function applyPreview(
+  current: ItemInput,
+  preview: LinkPreview,
+  previous: LinkPreview | undefined,
+  editedFields: Set<keyof ItemInput>,
+): ItemInput {
+  const next = { ...current, url: preview.url };
+
+  for (const key of previewTextFields) {
+    if (
+      !editedFields.has(key) &&
+      (preview[key] || (preview.url !== previous?.url && current[key] === previous?.[key]))
+    )
+      next[key] = preview[key];
+  }
+
+  if (!editedFields.has('type')) next.type = preview.type;
+
+  if (!editedFields.has('tags')) {
+    next.tags = [
+      ...new Set([
+        ...current.tags.filter((tag) => !previous?.tags.includes(tag)),
+        ...preview.tags,
+      ]),
+    ].slice(0, 20);
+  }
+
+  return next;
+}
+
 interface Props {
   item?: CollectionItem;
   initialType?: ContentType;
@@ -11,6 +45,7 @@ interface Props {
   onClose: () => void;
   onSave: (input: ItemInput, id?: string) => Promise<CollectionItem>;
 }
+
 export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Props) {
   const [form, setForm] = useState<ItemInput>(item ? itemInput(item) : emptyItem(initialType));
   const [mode, setMode] = useState<'link' | 'note' | 'image'>(
@@ -26,20 +61,25 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
   );
   const [linkText, setLinkText] = useState(item?.url || '');
   const [tagText, setTagText] = useState('');
+
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [suggestion, setSuggestion] = useState<Awaited<ReturnType<typeof api.organize>>>();
+
   const abort = useRef<AbortController | null>(null);
   const editedFields = useRef(new Set<keyof ItemInput>());
   const lastPreview = useRef<LinkPreview | undefined>(item);
   const identifiedText = useRef('');
   const fileRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => () => abort.current?.abort(), []);
+
   function update<K extends keyof ItemInput>(key: K, value: ItemInput[K]) {
     editedFields.current.add(key);
     setForm((current) => ({ ...current, [key]: value }));
   }
+
   function switchMode(next: typeof mode) {
     abort.current?.abort();
     setMode(next);
@@ -52,6 +92,7 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
     lastPreview.current = undefined;
     identifiedText.current = '';
   }
+
   function changeLink(text: string) {
     abort.current?.abort();
     setLinkText(text);
@@ -61,6 +102,7 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
     identifiedText.current = '';
     if (busy === 'preview') setBusy('');
   }
+
   async function identify(text = linkText) {
     setBusy('preview');
     setError('');
@@ -74,27 +116,9 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
       const previousPreview = lastPreview.current;
       lastPreview.current = preview;
       identifiedText.current = text;
-      setForm((current) => {
-        const next = { ...current, url: preview.url };
-        for (const key of ['title', 'description', 'cover', 'source', 'author'] as const) {
-          if (
-            !editedFields.current.has(key) &&
-            (preview[key] ||
-              (preview.url !== previousPreview?.url && current[key] === previousPreview?.[key]))
-          )
-            next[key] = preview[key];
-        }
-        if (!editedFields.current.has('type')) next.type = preview.type;
-        if (!editedFields.current.has('tags')) {
-          next.tags = [
-            ...new Set([
-              ...current.tags.filter((tag) => !previousPreview?.tags.includes(tag)),
-              ...preview.tags,
-            ]),
-          ].slice(0, 20);
-        }
-        return next;
-      });
+      setForm((current) =>
+        applyPreview(current, preview, previousPreview, editedFields.current),
+      );
       setNotice(preview.warning || '已自动提取标题、封面等信息，可修改后收藏');
     } catch (error) {
       if (!controller.signal.aborted) setError(error instanceof Error ? error.message : '识别失败');
@@ -102,6 +126,7 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
       if (abort.current === controller && !controller.signal.aborted) setBusy('');
     }
   }
+
   async function upload(file?: File) {
     if (!file) return;
     setBusy('upload');
@@ -117,6 +142,7 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
       setBusy('');
     }
   }
+
   async function organize() {
     setBusy('ai');
     setError('');
@@ -136,6 +162,7 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
       setBusy('');
     }
   }
+
   function addTags(text: string) {
     const tags = text
       .split(/[,，\n]/)
@@ -144,6 +171,7 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
     update('tags', [...new Set([...form.tags, ...tags])].slice(0, 20));
     setTagText('');
   }
+
   async function submit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
@@ -190,6 +218,7 @@ export function ItemEditor({ item, initialType, aiEnabled, onClose, onSave }: Pr
       setBusy('');
     }
   }
+
   return (
     <Dialog title={item ? '编辑收藏' : '添加收藏'} onClose={onClose} className="editor-dialog">
       {!item && (

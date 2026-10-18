@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CollectionItem, ItemInput } from '../../shared/types';
 import { api } from '../lib/api';
+
 export function useCollection(enabled: boolean) {
   const [items, setItems] = useState<CollectionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
   const reload = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -16,6 +18,7 @@ export function useCollection(enabled: boolean) {
       setLoading(false);
     }
   }, []);
+
   useEffect(() => {
     if (enabled) void reload();
     else {
@@ -23,6 +26,7 @@ export function useCollection(enabled: boolean) {
       setLoading(false);
     }
   }, [enabled, reload]);
+
   async function save(input: ItemInput, id?: string) {
     const item = await api.save(input, id);
     setItems((current) =>
@@ -30,6 +34,7 @@ export function useCollection(enabled: boolean) {
     );
     return item;
   }
+
   async function remove(id: string) {
     await api.remove(id);
     setItems((current) => current.filter((item) => item.id !== id));

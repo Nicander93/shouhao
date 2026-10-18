@@ -1,12 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  ArrowDownToLine,
   Bookmark,
   CheckCheck,
   ChevronDown,
   Inbox,
   LoaderCircle,
-  LogOut,
   Menu,
   Plus,
   Search,
@@ -14,96 +12,49 @@ import {
   Star,
   X,
 } from 'lucide-react';
-import type { AppConfig, CollectionItem, ContentType } from '../shared/types';
+import type { CollectionItem, ContentType } from '../shared/types';
 import { api } from './lib/api';
 import { filterItems, itemInput, typeLabels } from './lib/content';
 import { useCollection } from './hooks/useCollection';
+import { useAppSession } from './hooks/useAppSession';
 import { ContentIcon } from './components/Icon';
 import { ItemCard } from './components/ItemCard';
 import { ItemEditor } from './components/ItemEditor';
 import { ItemDetail } from './components/ItemDetail';
 import { Login } from './components/Login';
+import { Sidebar, useSidebarDialog } from './components/Sidebar';
+
 export function App() {
-  const [config, setConfig] = useState<AppConfig>();
-  const [configError, setConfigError] = useState('');
+  const [editor, setEditor] = useState<{ item?: CollectionItem; type?: ContentType }>();
+  const [selectedId, setSelectedId] = useState('');
+  const { config, configError, loadConfig } = useAppSession(() => {
+    setEditor(undefined);
+    setSelectedId('');
+  });
+
+  // 筛选
   const [query, setQuery] = useState('');
   const [view, setView] = useState('all');
   const [type, setType] = useState('');
   const [tag, setTag] = useState('');
   const [sort, setSort] = useState('newest');
-  const [editor, setEditor] = useState<{ item?: CollectionItem; type?: ContentType }>();
-  const [selectedId, setSelectedId] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const sidebarRef = useRef<HTMLElement>(null);
-  const menuRef = useRef<HTMLButtonElement>(null);
+
+  const { open: sidebarOpen, setOpen: setSidebarOpen, sidebarRef, menuRef } = useSidebarDialog();
+
+  // 操作反馈
   const [busyIds, setBusyIds] = useState(new Set<string>());
   const [toast, setToast] = useState('');
+
   const collection = useCollection(Boolean(config?.authenticated));
   const selected = collection.items.find((item) => item.id === selectedId);
-  async function loadConfig() {
-    setConfigError('');
-    try {
-      setConfig(await api.config());
-    } catch (error) {
-      setConfigError(error instanceof Error ? error.message : '服务暂不可用');
-    }
-  }
-  useEffect(() => {
-    void loadConfig();
-    const expired = () => {
-      setConfig((current) => (current ? { ...current, authenticated: false } : current));
-      setEditor(undefined);
-      setSelectedId('');
-    };
-    window.addEventListener('session-expired', expired);
-    return () => window.removeEventListener('session-expired', expired);
-  }, []);
+
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(''), 3500);
     return () => clearTimeout(timer);
   }, [toast]);
-  useEffect(() => {
-    if (!sidebarOpen) return;
-    const sidebar = sidebarRef.current;
-    const menu = menuRef.current;
-    if (!sidebar) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const controls = () =>
-      [...sidebar.querySelectorAll<HTMLElement>('a[href], button:not(:disabled)')].filter(
-        (element) => element.getClientRects().length > 0,
-      );
-    const focusFrame = requestAnimationFrame(() => controls()[0]?.focus({ preventScroll: true }));
-    function handleKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') setSidebarOpen(false);
-      if (event.key !== 'Tab') return;
-      const elements = controls();
-      const first = elements[0];
-      const last = elements.at(-1);
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
-    }
-    const desktop = window.matchMedia('(min-width: 761px)');
-    const closeOnDesktop = () => {
-      if (desktop.matches) setSidebarOpen(false);
-    };
-    closeOnDesktop();
-    desktop.addEventListener('change', closeOnDesktop);
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      cancelAnimationFrame(focusFrame);
-      desktop.removeEventListener('change', closeOnDesktop);
-      document.removeEventListener('keydown', handleKey);
-      menu?.focus();
-    };
-  }, [sidebarOpen]);
+
+  // 当前列表
   const tags = useMemo(() => {
     const counts = new Map<string, number>();
     collection.items.forEach((item) =>
@@ -111,6 +62,7 @@ export function App() {
     );
     return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'));
   }, [collection.items]);
+
   const filtered = useMemo(() => {
     const result = filterItems(collection.items, {
       query,
@@ -121,6 +73,7 @@ export function App() {
     });
     return sort === 'oldest' ? result.reverse() : result;
   }, [collection.items, query, type, tag, view, sort]);
+
   const navItems = [
     { id: 'all', label: '全部收藏', icon: Inbox, count: collection.items.length },
     {
@@ -142,6 +95,8 @@ export function App() {
       count: collection.items.filter((item) => item.starred).length,
     },
   ];
+
+  // 星标和已读只改这一条，不经过编辑器。
   async function updateItem(item: CollectionItem, field: 'status' | 'starred') {
     if (busyIds.has(item.id)) return;
     setBusyIds((current) => new Set(current).add(item.id));
@@ -165,6 +120,7 @@ export function App() {
       });
     }
   }
+
   if (configError)
     return (
       <main className="service-error">
@@ -175,129 +131,51 @@ export function App() {
         </button>
       </main>
     );
+
   if (!config)
     return (
       <main className="service-error">
         <LoaderCircle size={26} className="spin" aria-label="正在加载" />
       </main>
     );
+
   if (!config.authenticated) return <Login onSuccess={() => void loadConfig()} />;
+
+  const heading = tag ? `#${tag}` : navItems.find((item) => item.id === view)?.label;
+
   return (
     <div className="workspace">
-      {sidebarOpen && (
-        <button
-          className="sidebar-scrim"
-          aria-label="关闭菜单"
-          tabIndex={-1}
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-      <aside
-        id="collection-sidebar"
-        ref={sidebarRef}
-        className={`sidebar ${sidebarOpen ? 'sidebar--open' : ''}`}
-        role={sidebarOpen ? 'dialog' : undefined}
-        aria-modal={sidebarOpen ? true : undefined}
-        aria-label="收藏菜单"
-      >
-        <button
-          className="icon-button sidebar__close"
-          aria-label="收起菜单"
-          onClick={() => setSidebarOpen(false)}
-        >
-          <X size={20} />
-        </button>
-        <a className="brand" href="/" aria-label="收好首页">
-          <span className="brand__mark">
-            <Bookmark size={23} strokeWidth={1.5} />
-          </span>
-          <span>
-            收好<small>SHOUHAO</small>
-          </span>
-        </a>
-        <button
-          className="button button--primary sidebar__add"
-          onClick={() => {
-            setEditor({});
-            setSidebarOpen(false);
-          }}
-        >
-          <Plus size={18} />
-          添加收藏<kbd>N</kbd>
-        </button>
-        <nav className="sidebar__nav" aria-label="收藏导航">
-          {navItems.map(({ id, label, icon: Icon, count }) => (
-            <button
-              key={id}
-              className={`nav-item ${view === id && !tag ? 'nav-item--active' : ''}`}
-              onClick={() => {
-                setView(id);
-                setTag('');
-                setSidebarOpen(false);
-              }}
-            >
-              <Icon size={19} strokeWidth={1.6} />
-              <span>{label}</span>
-              <small>{count}</small>
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar__divider" />
-        <div className="sidebar__section-heading">
-          <span>我的标签</span>
-          <span>{tags.length}</span>
-        </div>
-        <div className="sidebar__tags">
-          {tags.length ? (
-            tags.map(([value, count]) => (
-              <button
-                className={`tag-nav ${tag === value ? 'tag-nav--active' : ''}`}
-                key={value}
-                onClick={() => {
-                  setTag(tag === value ? '' : value);
-                  setView('all');
-                  setSidebarOpen(false);
-                }}
-              >
-                <span className="tag-nav__hash">#</span>
-                <span>{value}</span>
-                <small>{count}</small>
-              </button>
-            ))
-          ) : (
-            <p>
-              收藏时添加标签，
-              <br />
-              以后更容易找到。
-            </p>
-          )}
-        </div>
-        <div className="sidebar__mascot">
-          <img src="/mascot.png" alt="抱着收藏的小本子" />
-          <span>喜欢的，帮你收好。</span>
-        </div>
-        <div className="sidebar__bottom">
-          <a href="/api/export" className="text-button" download>
-            <ArrowDownToLine size={16} />
-            导出收藏
-          </a>
-          {config.requiresPassword && (
-            <button
-              className="icon-button"
-              aria-label="退出"
-              onClick={() =>
-                void api
-                  .logout()
-                  .then(loadConfig)
-                  .catch((error) => setToast(error.message))
-              }
-            >
-              <LogOut size={16} />
-            </button>
-          )}
-          <span>一点一点，留下喜欢的。</span>
-        </div>
-      </aside>
+      <Sidebar
+        open={sidebarOpen}
+        sidebarRef={sidebarRef}
+        view={view}
+        tag={tag}
+        navItems={navItems}
+        tags={tags}
+        requiresPassword={config.requiresPassword}
+        onClose={() => setSidebarOpen(false)}
+        onAdd={() => {
+          setEditor({});
+          setSidebarOpen(false);
+        }}
+        onSelectView={(id) => {
+          setView(id);
+          setTag('');
+          setSidebarOpen(false);
+        }}
+        onSelectTag={(value) => {
+          setTag(tag === value ? '' : value);
+          setView('all');
+          setSidebarOpen(false);
+        }}
+        onLogout={() =>
+          void api
+            .logout()
+            .then(loadConfig)
+            .catch((error) => setToast(error.message))
+        }
+      />
+
       <main className="main" inert={sidebarOpen}>
         <header className="topbar">
           <div className="topbar__breadcrumb">
@@ -313,7 +191,7 @@ export function App() {
             </button>
             <span>我的收藏</span>
             <span className="topbar__slash">/</span>
-            <span>{tag ? `#${tag}` : navItems.find((item) => item.id === view)?.label}</span>
+            <span>{heading}</span>
           </div>
           <div className="topbar__right">
             <span className="topbar__count">{collection.items.length} 件收藏</span>
@@ -326,11 +204,12 @@ export function App() {
             </span>
           </div>
         </header>
+
         <section className="collection">
           <div className="collection__heading">
             <div>
               <p className="eyebrow">YOUR LITTLE COLLECTION</p>
-              <h1>{tag ? `#${tag}` : navItems.find((item) => item.id === view)?.label}</h1>
+              <h1>{heading}</h1>
               <p className="collection__subtitle">
                 {view === 'unread'
                   ? '有空的时候，再慢慢看。'
@@ -346,6 +225,7 @@ export function App() {
               <span>记个想法</span>
             </button>
           </div>
+
           <div className="collection__toolbar">
             <div className="search">
               <Search size={19} />
@@ -374,6 +254,7 @@ export function App() {
               <ChevronDown size={14} />
             </div>
           </div>
+
           <div className="collection__filters">
             <div className="type-filters" role="group" aria-label="内容类型">
               <button className={!type ? 'is-active' : ''} onClick={() => setType('')}>
@@ -392,12 +273,14 @@ export function App() {
             </div>
             <span className="result-count">{filtered.length} 件</span>
           </div>
+
           {tag && (
             <button className="selected-tag" onClick={() => setTag('')}>
               #{tag}
               <X size={13} />
             </button>
           )}
+
           {collection.loading ? (
             <div className="empty-state">
               <LoaderCircle className="spin" size={25} />
@@ -452,6 +335,7 @@ export function App() {
               )}
             </div>
           )}
+
           {filtered.length > 0 && (
             <footer className="collection__footer">
               <span className="hand-dash" />
@@ -461,6 +345,7 @@ export function App() {
           )}
         </section>
       </main>
+
       {editor && (
         <ItemEditor
           item={editor.item}
@@ -474,6 +359,7 @@ export function App() {
           }}
         />
       )}
+
       {selected && !editor && (
         <ItemDetail
           item={selected}
@@ -486,15 +372,18 @@ export function App() {
           onRemove={collection.remove}
         />
       )}
+
       {toast && (
         <div className="toast" role="status">
           {toast}
         </div>
       )}
+
       <KeyboardShortcut onAdd={() => setEditor({})} />
     </div>
   );
 }
+
 function KeyboardShortcut({ onAdd }: { onAdd: () => void }) {
   useEffect(() => {
     function handler(event: KeyboardEvent) {
@@ -513,5 +402,6 @@ function KeyboardShortcut({ onAdd }: { onAdd: () => void }) {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [onAdd]);
+
   return null;
 }

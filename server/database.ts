@@ -31,20 +31,24 @@ export function createRepository(path: string) {
       updatedAt: String(row.updated_at),
     };
   }
+
   function list() {
     return db
       .prepare('SELECT * FROM items ORDER BY created_at DESC, rowid DESC')
       .all()
       .map((row) => map(row));
   }
+
   function get(id: string) {
     const row = db.prepare('SELECT * FROM items WHERE id = ?').get(id);
     return row ? map(row) : undefined;
   }
+
   function findUrl(url: string) {
     const row = db.prepare('SELECT * FROM items WHERE url = ?').get(url);
     return row ? map(row) : undefined;
   }
+
   function save(input: ItemInput, id?: string): CollectionItem {
     const now = new Date().toISOString();
     const existing = id ? get(id) : undefined;
@@ -78,9 +82,12 @@ export function createRepository(path: string) {
     );
     return item;
   }
+
   function remove(id: string) {
     return db.prepare('DELETE FROM items WHERE id = ?').run(id).changes > 0;
   }
+
   return { list, get, findUrl, save, remove, close: () => db.close() };
 }
+
 export type ItemRepository = ReturnType<typeof createRepository>;

@@ -36,6 +36,7 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
     for (const [key, value] of attempts) if (value.expires <= Date.now()) attempts.delete(key);
   }, 60_000);
   timer.unref();
+
   function sessionToken(req: Request) {
     return (
       req.headers.cookie
@@ -44,9 +45,11 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
         ?.split('=')[1] || ''
     );
   }
+
   function authenticated(req: Request) {
     return !config.password || (sessions.get(sessionToken(req)) || 0) > Date.now();
   }
+
   app.use('/api', (_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     next();
@@ -75,9 +78,11 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
     }
     next();
   });
+
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
   });
+
   app.get('/api/config', (req, res) => {
     res.json({
       aiEnabled: Boolean(config.ai.apiKey && config.ai.model),
@@ -85,6 +90,7 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
       requiresPassword: Boolean(config.password),
     });
   });
+
   app.post('/api/session', (req, res) => {
     const key = req.socket.remoteAddress || 'unknown';
     const current = attempts.get(key);
@@ -116,6 +122,7 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
     });
     res.json({ ok: true });
   });
+
   app.use(['/api', '/uploads'], (req, res, next) => {
     if (!authenticated(req)) {
       res.status(401).json({ error: '请先输入访问密码' });
@@ -123,14 +130,18 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
     }
     next();
   });
+
   app.delete('/api/session', (req, res) => {
     sessions.delete(sessionToken(req));
     res.clearCookie('shouhao_session');
     res.json({ ok: true });
   });
+
+  // 收藏
   app.get('/api/items', (_req, res) => {
     res.json(repository.list());
   });
+
   app.post('/api/items', (req, res) => {
     const input = itemSchema.parse(req.body);
     if (input.url) input.url = extractUrl(input.url);
@@ -140,6 +151,7 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
     }
     res.status(201).json(repository.save(input));
   });
+
   app.put('/api/items/:id', (req, res) => {
     const id = String(req.params.id);
     if (!repository.get(id)) {
@@ -155,6 +167,7 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
     }
     res.json(repository.save(input, id));
   });
+
   app.delete('/api/items/:id', (req, res) => {
     if (!repository.remove(String(req.params.id))) {
       res.status(404).json({ error: '收藏不存在' });
@@ -162,6 +175,7 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
     }
     res.status(204).end();
   });
+
   app.post('/api/preview', async (req, res) => {
     const { text } = z.object({ text: z.string().trim().min(1).max(6000) }).parse(req.body);
     try {
@@ -170,6 +184,7 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
       res.status(400).json({ error: error instanceof Error ? error.message : '链接格式不正确' });
     }
   });
+
   app.post('/api/ai/organize', async (req, res) => {
     if (!config.ai.apiKey || !config.ai.model) {
       res.status(503).json({ error: '尚未配置 AI 服务，可以先手动整理' });
@@ -182,6 +197,7 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
       res.status(502).json({ error: error instanceof Error ? error.message : 'AI 服务暂不可用' });
     }
   });
+
   app.post('/api/uploads', (req, res) => {
     const input = z
       .object({ data: z.string().max(11_200_000), name: z.string().max(300) })
@@ -216,18 +232,24 @@ export function createApp(repository: ItemRepository, config: ServerConfig) {
     writeFileSync(join(uploadDir, filename), bytes, { flag: 'wx' });
     res.status(201).json({ url: `/uploads/${filename}` });
   });
+
   app.get('/api/export', (_req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="shouhao-export.json"');
     res.json({ version: 1, exportedAt: new Date().toISOString(), items: repository.list() });
   });
+
   app.use('/uploads', express.static(uploadDir, { index: false }));
+
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: '接口不存在' });
   });
+
   app.use(express.static(config.staticDir, { index: false }));
+
   app.get('/', (_req, res) => {
     res.sendFile(join(config.staticDir, 'index.html'));
   });
+
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: error.issues[0]?.message || '输入格式不正确' });
